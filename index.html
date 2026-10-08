@@ -1076,8 +1076,10 @@ body.drawer .rail{transform:none;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
     <li><b>Pixels become −1 to 1</b><p>Each pixel goes from 0 … 255 to −1 … 1 by <code>value / 127.5 − 1</code>. This is the same rule as for any frame.</p></li>
     <li><b>The noise goes on the pixels</b><p>A push first mixes the picture with a little noise, t = 0.05. Both pictures below are real. The noise is never added to k or v, because they are computed afterwards.</p></li>
     <li><b>Why a little noise</b><p>In play, the past is the model's own drawings, which are slightly off. The model was trained on a slightly noisy past, so it can read an imperfect past. Errors can still pile up, and a later training stage works on that.</p></li>
+    <li><b>Kept once, read many times</b><p>Without the shelf, each pass would run all 15 pictures again, plus the new frame. That is 4,096 rows through the 16 blocks, twice per new frame. With the shelf, only the new frame's 256 rows go in. Two draw passes and one push make 768 rows in all, 10.7 times fewer. The block still gets 256 rows and gives back 256 rows on every pass.</p></li>
+    <li><b>Why the saved rows stay right</b><p>A saved frame's rows may read only older frames and themselves. They never read the new frame, so drawing it cannot change them. Running them again would give the same k and v. We checked this on 15 real frames of one game. The biggest difference between both ways was 0.00003, which is rounding.</p></li>
   </ol>
-  <div class="takeaway good"><b>Noise goes in at the pixels, once per push.</b> k and v are made from the slightly noisy picture. <span class="cite">Idea from: <a href="https://arxiv.org/abs/2408.14837">GameNGen</a> (Valevski et al., 2024), a little noise on the past.</span></div>
+  <div class="takeaway good"><b>Noise goes in at the pixels, once per push.</b> k and v are made from the slightly noisy picture. Every later pass reads them and never computes them again. <span class="cite">Ideas from: <a href="https://arxiv.org/abs/2408.14837">GameNGen</a> (Valevski et al., 2024), a little noise on the past; <a href="https://arxiv.org/abs/2412.07772">CausVid</a> (Yin et al., 2024), keep k and v of past frames.</span></div>
 </article>
 <!-- ============ Cz25 · a push ============ -->
 <article class="page" data-id="cz-live-push" data-part="One forward pass, every number" data-nav="A push: one run, 16 shelves">
@@ -4190,21 +4192,62 @@ function czRedMap(bg, vals, size, o){ o = o || {}; return czFmap(bg, vals, {size
   czAt(st, czE("div", null, "difference to the real Streamer, same seed: <b>" + J.check_vs_streamer + "</b> · " + J.steps + " passes · memory noise t = " + J.tc + " · game frame " + J.t0, 5), 10, 610, 5);
 })();
 
-/* ---------- Cz24: the 15 memory pictures; clean vs pushed ---------- */
+/* ---------- Cz24: the 15 memory pictures; clean vs pushed; why k, v are kept ---------- */
 (function(){
   var host = $("cz24Fig"); if (!host || !window.FWD_LV) return;
-  var J = FWD_LV, st = czStage(host, 940, 560); czMarks(st, 5);
+  var J = FWD_LV, st = czStage(host, 940, 560); czMarks(st, 7);
   czAt(st, czWhere(["mem", "push"]), 10, 0, 0);
   var r = czE("div", "czflex", ""); r.style.cssText = "gap:4px;width:940px";
   J.mem.forEach(function(m, j){ var f = czFig(czImg(m, 56), "m" + (j + 1) + "<br>key " + J.mem_keys[j]); f.style.width = "56px"; r.appendChild(f); });
-  czAt(st, r, 10, 100, 1);
-  czAt(st, czE("div", "czcard", "a picture is used once, when it is pushed.\nkept: k and v rows in every block (not the picture)", 2), 10, 230, 2);
-  czAt(st, czE("div", "czcard", "pixel value 0 … 255  →  value / 127.5 − 1  →  −1 … 1", 3), 10, 300, 3);
+  czAt(st, r, 10, 100, 1, 6);
+  czAt(st, czE("div", "czcard", "a picture is used once, when it is pushed.\nkept: k and v rows in every block (not the picture)", 2), 10, 230, 2, 6);
+  czAt(st, czE("div", "czcard", "pixel value 0 … 255  →  value / 127.5 − 1  →  −1 … 1", 3), 10, 300, 3, 6);
   var b = czE("div", null, ""); b.appendChild(czE("div", "czcode", "pushed = 0.95 · frame + 0.05 · noise          <span class='cm'># Streamer.push, t_ctx = 0.05</span>"));
   var q = czE("div", "czflex", ""); q.style.cssText = "gap:14px;margin-top:12px";
   q.appendChild(czFig(czImg(J.mem[0], 170), "m1 clean")); q.appendChild(czFig(czImg(J.push[0].noised, 170), "m1 as pushed (t = 0.05)")); q.appendChild(czFig(czImg(J.mem[14], 170), "m15 clean")); q.appendChild(czFig(czImg(J.push[14].noised, 170), "m15 as pushed"));
-  b.appendChild(q); czAt(st, b, 10, 360, 4);
-  czAt(st, czE("div", "czcard", "trained with a slightly noisy past →\nit can read an imperfect past\n(errors can still pile up)", 5), 480, 300, 5);
+  b.appendChild(q); czAt(st, b, 10, 360, 4, 6);
+  czAt(st, czE("div", "czcard", "trained with a slightly noisy past →\nit can read an imperfect past\n(errors can still pile up)", 5), 480, 300, 5, 6);
+
+  /* step 6: rows sent through the 16 blocks for one new frame, two ways */
+  var PX = 680 / 8192;
+  function bar(parts, title, total){
+    var box = czE("div", null, ""); box.style.cssText = "width:920px";
+    box.appendChild(czE("div", "czcard", title)).style.cssText = "margin-bottom:6px";
+    var line = czE("div", "czflex", ""); line.style.cssText = "gap:3px;align-items:center";
+    parts.forEach(function(p){
+      var seg = czE("div", null, p[0] + "<br><b>" + czNf(p[1]) + "</b>");
+      seg.style.cssText = "width:" + Math.max(64, Math.round(p[1] * PX)) + "px;height:52px;box-sizing:border-box;padding:4px 6px;border-radius:6px;font:12px/1.3 var(--mono);color:var(--ink);background:" + p[2] + ";border:1px solid var(--hair)";
+      line.appendChild(seg); });
+    line.appendChild(czE("div", null, "= <b>" + czNf(total) + "</b> rows")).style.cssText = "font:15px var(--mono);color:var(--ink);margin-left:8px;white-space:nowrap";
+    box.appendChild(line); return box; }
+  czAt(st, czE("div", "czcard", "for ONE new frame: how many rows go through the 16 blocks?", 6), 10, 90, 6, 7);
+  czAt(st, bar([["pass 1: 15 pictures + new", 4096, "var(--bad-soft)"], ["pass 2: 15 pictures + new", 4096, "var(--bad-soft)"]],
+               "A. keep the 15 pictures, run them through every pass again", 8192), 10, 150, 6, 7);
+  czAt(st, bar([["pass 1", 256, "var(--good-soft)"], ["pass 2", 256, "var(--good-soft)"], ["push", 256, "var(--good-soft)"]],
+               "B. keep their k and v (the shelf): only the new frame goes in", 768), 10, 275, 6, 7);
+  var big = czE("div", null, "<b style='font:44px var(--cond);color:var(--good)'>10.7×</b><br>fewer rows through the blocks (8,192 ÷ 768)");
+  big.style.cssText = "font:14px/1.4 var(--mono);color:var(--ink)"; czAt(st, big, 10, 395, 6, 7);
+  czAt(st, czE("div", "czcode", "every pass:  block IN [1, 1, 256, 768]  →  block OUT [1, 1, 256, 768]\nattention reads  3,840 saved + 256 own = 4,096 rows of k and v"), 10, 490, 6, 7);
+
+  /* step 7: who may read whom. Old rows never read the new frame, so their k, v never change */
+  var N = 16, C = 19, g = czE("div", null, ""); g.style.cssText = "position:relative;width:" + (60 + N * C) + "px;height:" + (30 + N * C) + "px";
+  for (var i = 0; i < N; i++){
+    var lab = i < 15 ? "m" + (i + 1) : "new";
+    var rl = czE("div", null, lab); rl.style.cssText = "position:absolute;left:0;top:" + (30 + i * C) + "px;width:52px;text-align:right;font:11px/" + C + "px var(--mono);color:" + (i < 15 ? "var(--ink2)" : "var(--ink)"); g.appendChild(rl);
+    if (i === 0 || i === 14 || i === 15){ var cl = czE("div", null, lab); cl.style.cssText = "position:absolute;top:8px;left:" + (60 + i * C - 6) + "px;width:" + (C + 12) + "px;text-align:center;font:10px var(--mono);color:var(--ink2)"; g.appendChild(cl); }
+    for (var j = 0; j < N; j++){
+      var c = czE("div", null, ""), bg = "var(--paper)", bd = "1px solid var(--hair)";
+      if (i === 15) bg = "var(--move)";
+      else if (j <= i) bg = "var(--learn-soft)";
+      else if (j === 15) bd = "2px dashed var(--bad)";
+      c.style.cssText = "position:absolute;box-sizing:border-box;left:" + (60 + j * C) + "px;top:" + (30 + i * C) + "px;width:" + (C - 2) + "px;height:" + (C - 2) + "px;background:" + bg + ";border:" + bd;
+      g.appendChild(c); } }
+  czAt(st, czE("div", "czcard", "row = the frame reading · column = the frame it may read", 7), 10, 90, 7);
+  czAt(st, g, 10, 125, 7);
+  czAt(st, czE("div", "czcard", "blue: a saved frame reads only older frames and itself\nyellow: the new frame reads everything\nred dashes: no saved frame ever reads the new frame", 7), 420, 130, 7);
+  czAt(st, czE("div", "czcard", "so drawing the new frame cannot change the saved rows.\nrunning them again would give the same k and v.", 7), 420, 250, 7);
+  var chk = czE("div", null, "<b style='font:40px var(--cond);color:var(--good)'>0.00003</b><br>biggest difference: 15 real frames pushed one at a time\nvs all 15 run at once, all 16 shelves (rounding only)");
+  chk.style.cssText = "font:13px/1.4 var(--mono);color:var(--ink);white-space:pre-line"; czAt(st, chk, 420, 350, 7);
 })();
 
 /* ---------- Cz25: a push ---------- */
